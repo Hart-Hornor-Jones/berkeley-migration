@@ -610,11 +610,14 @@ function render(animate){
     const linksEnter=links.enter().append('path').attr('fill','none')
       .attr('d',linkPath).attr('stroke-width',d=>Math.max(1,d.w)).attr('stroke-opacity',0);
     linkSel=linksEnter.merge(links);
-    const lTarget = ms>0 ? linkSel.transition().duration(ms).ease(d3.easeCubicInOut) : linkSel;
+    // geometry animates on the NAMED 'geo' transition and never touches opacity;
+    // opacity/emphasis is applied directly by applyState. Keeping the channels
+    // separate is what lets a frame tween and a selection coexist without one
+    // interrupting (and freezing) the other.
+    const lTarget = ms>0 ? linkSel.transition('geo').duration(ms).ease(d3.easeCubicInOut) : linkSel;
     lTarget.attr('d',linkPath)
       .attr('stroke',linkColor)
-      .attr('stroke-width',d=>Math.max(1,d.w))
-      .attr('stroke-opacity', diffMap? .78 : .42);
+      .attr('stroke-width',d=>Math.max(1,d.w));
 
     const nodeData=[...lay.pos.entries()].map(([id,p])=>{
       const n=graph.nodes.find(x=>x.id===id); return {...n,...p};});
@@ -625,14 +628,14 @@ function render(animate){
     ne.append('text');
     ne.append('rect').attr('class','hit').attr('fill','transparent');
     nodeSel=ne.merge(nodes);
-    const nTargetBox = ms>0 ? nodeSel.select('rect.box').transition().duration(ms).ease(d3.easeCubicInOut)
+    const nTargetBox = ms>0 ? nodeSel.select('rect.box').transition('geo').duration(ms).ease(d3.easeCubicInOut)
                             : nodeSel.select('rect.box');
     nTargetBox.attr('x',d=>d.x0).attr('y',d=>d.y0).attr('width',d=>d.x1-d.x0)
       .attr('height',d=>Math.max(1,d.y1-d.y0)).attr('rx',2).attr('fill',nodeColor);
     nodeSel.select('rect.hit')
       .attr('x',d=>d.x0-6).attr('y',d=>d.y0-4).attr('width',d=>d.x1-d.x0+12)
       .attr('height',d=>Math.max(9,d.y1-d.y0+8)).style('cursor','grab');
-    const nTargetTxt = ms>0 ? nodeSel.select('text').transition().duration(ms).ease(d3.easeCubicInOut)
+    const nTargetTxt = ms>0 ? nodeSel.select('text').transition('geo').duration(ms).ease(d3.easeCubicInOut)
                             : nodeSel.select('text');
     nTargetTxt.attr('x',d=>d.stage===2? d.x0-8 : d.x1+8)
       .attr('y',d=>(d.y0+d.y1)/2).attr('dy','.32em')
@@ -640,14 +643,13 @@ function render(animate){
       .attr('font-size',d=>(d.y1-d.y0)>=13?11.5:9.5)
       .attr('fill',cssv('--ink-1'))
       .text(d=>(d.y1-d.y0)>3.4? d.label+'  '+fmt(d.value) : '');
-    if(ms>0) setTimeout(()=>applyState(), ms+40); else applyState();
+    applyState();
   }
   repose(doTween? 850 : 0);
   cur.repose=repose;
 
   // --- emphasis + callout ---
   function setEmphasis(pred, calloutKids){
-    linkSel.interrupt();
     linkSel.attr('stroke-opacity',d=> pred==null||pred(d) ? (diffMap?.82:.46) : (diffMap?.10:.05));
     const co=document.getElementById('callout'); co.replaceChildren();
     if(calloutKids) co.append(...calloutKids);
