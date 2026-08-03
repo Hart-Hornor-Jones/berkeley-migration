@@ -190,27 +190,27 @@
 
       <details class="about">
         <summary>About these data</summary>
-        <p><b>Source and grain.</b> UC Berkeley OPAP's public <i>Major Migration</i> dashboard
-        (calviz.berkeley.edu), harvested through its view-export channel as head-count matrices:
-        intended × declared and intended × degree at department grain, and declared × degree from the
-        department pathway tensor summed over the intended axis only. Each matrix cell counts a
-        student at most once — intended major is single-valued, so a cell is “distinct students who
-        intended X and ended in Y.”</p>
-        <p><b>What can and cannot be summed.</b> A student with two declared majors appears once in
-        each major's node, so node values are honest but nodes do not sum to the entering class, and
-        a student who left one department for two others is counted on both corridors. Departure and
-        arrival totals are therefore corridor totals, and are labeled as such. Rings never mix
-        grains: each is the unit's diagonal over its own distinct-student marginal.</p>
-        <p><b>Two independent harvests agree exactly.</b> The per-cohort layer comes from a
-        2026-07-04 scrape of the dashboard's drill-down states; the era frames come from the
-        2026-08-01 pin/matrix tensor harvest — two separately written extractors on two different
-        dashboard channels. Compared cell by cell (30 of 30 frame × leg comparisons, ~48,000 cells),
-        they agree with zero disagreements, and the build re-runs that comparison as an assertion.</p>
-        <p><b>Censoring.</b> Recent cohorts have not had time to finish: degree-stage views are
-        suppressed for freshman cohorts after 2021 and transfer cohorts after 2022, and flagged ⚠
-        where partly observable. The 2023 transfer declared-stage view is a dashboard artifact and
-        is flagged. The College of Computing, Data Science &amp; Society (est. 2023) is retroactively
-        assigned by the dashboard, so earlier-cohort CDSS flows reflect reclassified majors.</p>
+        <p><b>Source and counting.</b> UC Berkeley's Office of Planning &amp; Analysis publishes
+        a public “Major Migration” dashboard; every figure here is read from it. The three views are
+        head-count tables — intended major × declared major, intended × degree, and declared ×
+        degree — and each cell counts a student at most once: a cell is “students who started at X
+        and ended at Y.”</p>
+        <p><b>What can and cannot be summed.</b> A student with two declared majors belongs to both
+        majors' nodes, so node values are each honest but nodes do not sum to the entering class;
+        likewise a student who left one department for two others is counted on both corridors.
+        Departure and arrival totals are therefore corridor totals, and are labeled as such. The
+        ring around each node never mixes counts: it is the department's own students continuing,
+        over the department's own total.</p>
+        <p><b>Checked twice, independently.</b> The same numbers were extracted from the dashboard
+        twice, by two separately written programs reading two different views of it, and the two
+        extractions agree exactly, cell for cell. That comparison is re-run automatically whenever
+        the data behind this page is rebuilt.</p>
+        <p><b>Recent classes are incomplete.</b> Students from recent cohorts have not had time to
+        finish, so degree-stage views are not shown for freshman cohorts after 2021 or transfer
+        cohorts after 2022, and are flagged ⚠ where only partly observable. The 2023 transfer
+        declared-stage view reflects a recording change and is flagged. The College of Computing,
+        Data Science &amp; Society (established 2023) is applied retroactively by the university's
+        dashboard, so its earlier-cohort flows reflect reclassified majors.</p>
       </details>
     </div>
   </div>
@@ -243,7 +243,7 @@ const shortDept = n => n==='Data Science Undergrad Studies'?'Data Science'
 
 // ---------- state ----------
 const S = { entry:'nf', leg:'l1', period:'era:0', layout:'force', thr:5, nd:true,
-            lblAll:false, focus:null, secSel:null };
+            lblAll:false, focus:null, secSel:null, tieSel:null };
 (function readHash(){
   try{
     const h = new URLSearchParams(location.hash.slice(1));
@@ -422,7 +422,7 @@ const zoom = d3.zoom().scaleExtent([.25,6]).on('zoom', e=>{
   if(e.sourceEvent) manualZoom=true; zoomG.attr('transform',e.transform); });
 svg.call(zoom).on('dblclick.zoom',null);
 document.getElementById('btnReset').addEventListener('click', ()=>{ manualZoom=false; fitView(lastNodes); });
-svg.on('click', e=>{ if(e.target===svg.node()){ S.focus=null; S.secSel=null; update(); } });
+svg.on('click', e=>{ if(e.target===svg.node()){ S.focus=null; S.secSel=null; S.tieSel=null; update(); } });
 let lastNodes = [];
 function fitView(nodes){
   if(!nodes || !nodes.length) return;
@@ -433,6 +433,21 @@ function fitView(nodes){
   svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity.translate(tx,ty).scale(k));
 }
 let sim = null, posCache = {};
+// Restyle vs re-layout: clicking a node, tie or legend chip must never re-run the force
+// simulation — that is what made every click convulse the whole graph. The built graph
+// and its positions are cached per slice; selection changes only repaint.
+let lastG = null, lastKey = null;
+const COLORMK = new Set();
+function markerFor(color){
+  const id = 'mkc' + color.replace(/[^a-zA-Z0-9]/g,'');
+  if(!COLORMK.has(id)){
+    defs.append('marker').attr('id',id).attr('viewBox','0 -5 11 10').attr('refX',9.5)
+      .attr('markerWidth',12).attr('markerHeight',12).attr('markerUnits','userSpaceOnUse')
+      .attr('orient','auto').append('path').attr('d','M0,-4.4L10.2,0L0,4.4').attr('fill',color);
+    COLORMK.add(id);
+  }
+  return `url(#${id})`;
+}
 const tip = document.getElementById('tip');
 function showTip(html, ev){ tip.innerHTML=html; tip.style.display='block';
   const r = tip.getBoundingClientRect();
@@ -461,7 +476,10 @@ function update(reheat){
   thrEl.max = Math.max(30, S.thr*3);
   document.getElementById('thrval').textContent = '≥ '+S.thr;
   document.getElementById('ndWrap').style.display = S.leg==='l1' ? 'none' : 'block';
-  const G = buildGraph();
+  const sliceKey = [S.entry,S.leg,S.period,S.layout,S.thr,S.nd].join('|');
+  const fresh = reheat || !lastG || sliceKey !== lastKey;
+  const G = fresh ? buildGraph() : lastG;
+  if(fresh){ lastG = G; lastKey = sliceKey; }
   lastNodes = G.nodes;
   const focusNode = S.focus!==null ? G.nodes.find(n=>n.i===S.focus) : null;
   if(S.focus!==null && !focusNode) S.focus = null;
@@ -490,6 +508,7 @@ function update(reheat){
   const wScale = d3.scaleSqrt().domain([1,maxC]).range([.7,9]);
   const lw = l => wScale(l.c);
 
+  if(fresh){
   for(const n of G.nodes){ const p = posCache[n.id]; if(p){ n.x=p.x; n.y=p.y; } }
   if(S.layout==='circle'){
     if(sim) sim.stop();
@@ -514,14 +533,17 @@ function update(reheat){
       .force('collide', d3.forceCollide().radius(n=>radius(n,rScale)+8).iterations(2))
       .force('x', d3.forceX(n=> n.isSink? W/2 : (secCenters[n.sec]||[W/2])[0]).strength(.055))
       .force('y', d3.forceY(n=> n.isSink? H/2 : (secCenters[n.sec]||[0,H/2])[1]).strength(.055))
-      .alpha(reheat?1:.6).alphaDecay(.035)
+      .alpha(reheat?1:.35).alphaDecay(.035)
       .on('tick', tick).on('end', ()=>{ for(const n of G.nodes) posCache[n.id]={x:n.x,y:n.y};
         if(!manualZoom) fitView(G.nodes); });
   }
+  }
 
-  // Two ways to select: click a node (its ego network), or click a legend chip (the
-  // whole discipline group's ego network). Selection EMPHASIZES — nothing is removed.
-  const selSec = (!focusNode && S.secSel) ? S.secSel : null;
+  // Three ways to select, all restyle-only: a node (its ego network), a legend chip
+  // (a whole discipline group), or a TIE (that corridor and its reverse). Selection
+  // EMPHASIZES — nothing is removed.
+  const tieSel = (!focusNode && S.tieSel) ? S.tieSel : null;
+  const selSec = (!focusNode && !tieSel && S.secSel) ? S.secSel : null;
   const inSel = n => selSec !== null && n.sec === selSec;
   const outSet = new Set(), inSet = new Set();
   if(focusNode) for(const l of G.links){
@@ -531,10 +553,17 @@ function update(reheat){
     if(inSel(l.s) && !inSel(l.t)) outSet.add(l.t.i);
     if(inSel(l.t) && !inSel(l.s)) inSet.add(l.s.i);
   }
-  const hasSel = !!(focusNode || selSec);
-  const isNb = n => !hasSel || n===focusNode || inSel(n) || outSet.has(n.i) || inSet.has(n.i);
+  const hasSel = !!(focusNode || selSec || tieSel);
+  const isNb = n => !hasSel || n===focusNode || inSel(n)
+    || outSet.has(n.i) || inSet.has(n.i)
+    || (tieSel && (n.i===tieSel[0] || n.i===tieSel[1]));
   const lrole = l => {
     if(focusNode) return l.s===focusNode ? 'out' : l.t===focusNode ? 'in' : 'dim';
+    if(tieSel){
+      if(l.s.i===tieSel[0] && l.t.i===tieSel[1]) return 'sel';
+      if(l.s.i===tieSel[1] && l.t.i===tieSel[0]) return 'rev';
+      return 'dim';
+    }
     if(selSec){ const so=inSel(l.s), to=inSel(l.t);
       return so&&to ? 'within' : so ? 'out' : to ? 'in' : 'dim'; }
     return 'base';
@@ -545,18 +574,25 @@ function update(reheat){
   const lall = lsel.enter().append('path').attr('class','lk').attr('fill','none')
     .style('pointer-events','stroke').attr('stroke-linecap','round')
     .merge(lsel)
-    .attr('stroke-width', lw)
-    .attr('stroke', l=>({base: l.t.isSink? '#c4c2b8' : '#8d8781', out:'var(--warm)',
-      in:'var(--cool)', within:'#57534e', dim:'#e6e5df'})[lrole(l)])
-    .attr('marker-end', l=>({base:'url(#mk)', out:'url(#mkOut)', in:'url(#mkIn)',
-      within:'url(#mkWi)', dim:'url(#mkDim)'})[lrole(l)])
-    .attr('opacity', l=>{ const b=.18+.5*(lw(l)/9), r=lrole(l);
+    .attr('stroke', l=>{ const r=lrole(l);
+      return r==='base' ? l.s.color : r==='out'||r==='sel' ? 'var(--warm)'
+        : r==='in'||r==='rev' ? 'var(--cool)' : r==='within' ? '#57534e' : '#e6e5df'; })
+    .attr('marker-end', l=>{ const r=lrole(l);
+      return r==='base' ? markerFor(l.s.color) : r==='out'||r==='sel' ? 'url(#mkOut)'
+        : r==='in'||r==='rev' ? 'url(#mkIn)' : r==='within' ? 'url(#mkWi)' : 'url(#mkDim)'; })
+    .attr('opacity', l=>{ const b=.22+.5*(lw(l)/9), r=lrole(l);
       return r==='base' ? b : r==='dim' ? .05 : Math.min(.95, b+(r==='within'?.25:.35)); })
+    .attr('stroke-width', l=>{ const r=lrole(l);
+      return (r==='sel'||r==='rev') ? Math.max(2.5, lw(l)) : lw(l); })
     .on('mousemove',(e,l)=>showTip(
       `<b>${shortDept(l.s.id)}</b> → <b>${l.t.isSink?'No degree':shortDept(l.t.id)}</b><br>${fmt(l.c)} students`+
-      (l.s.origin? `<br>${pct(l.c/l.s.origin)} of ${shortDept(l.s.id)}'s ${oL}-stage students`:''), e))
+      (l.s.origin? `<br>${pct(l.c/l.s.origin)} of ${shortDept(l.s.id)}'s ${oL}-stage students`:'')+
+      `<br><span style="color:#898781">click to pin this tie</span>`, e))
     .on('mouseleave',hideTip)
-    .on('click',(e,l)=>{ e.stopPropagation(); S.focus=l.s.i; update(); });
+    .on('click',(e,l)=>{ e.stopPropagation(); S.focus=null; S.secSel=null;
+      const cur=S.tieSel;
+      S.tieSel = (cur && cur[0]===l.s.i && cur[1]===l.t.i) ? null : [l.s.i, l.t.i];
+      update(); });
 
   const nsel = gNodes.selectAll('g.nd').data(G.nodes, n=>n.i);
   nsel.exit().remove();
@@ -586,7 +622,7 @@ function update(reheat){
           `${fmt(n.origin)} ${oL} · ${fmt(n.dest)} ${dL}<br>`+
           `stay ${pct(share)} · out ${fmt(n.out)} · in ${fmt(n.inn)}${S.leg!=='l1'?` · no degree ${fmt(n.nd)}`:''}`, e); })
     .on('mouseleave',hideTip)
-    .on('click',(e,n)=>{ e.stopPropagation(); S.secSel=null;
+    .on('click',(e,n)=>{ e.stopPropagation(); S.secSel=null; S.tieSel=null;
       S.focus = (S.focus===n.i? null : n.i); update(); });
   if(S.layout==='force'){
     nall.call(d3.drag()
@@ -632,7 +668,7 @@ function update(reheat){
     `<span class="lg" style="cursor:default"><span class="sw" style="background:#fff;border:2px solid #8d8b81"></span>ring = share continuing in the same department</span>`;
   document.querySelectorAll('.lg[data-sv]').forEach(el=>{
     el.onclick = ()=>{ const sv=el.dataset.sv;
-      S.focus=null; S.secSel = S.secSel===sv ? null : sv; update(); };
+      S.focus=null; S.tieSel=null; S.secSel = S.secSel===sv ? null : sv; update(); };
   });
 
   const top = [...G.links].filter(l=>!l.t.isSink).sort((a,b)=>d3.descending(a.c,b.c)).slice(0,12);
@@ -643,12 +679,13 @@ function update(reheat){
     tr.onclick = ()=>{ S.focus=+tr.dataset.s; update(); window.scrollTo({top:0,behavior:'smooth'}); };
   });
 
-  drawPanel(G, focusNode, oL, dL);
+  drawPanel(G, focusNode, tieSel, oL, dL);
 }
 
 // ---------- side panel ----------
-function drawPanel(G, n, oL, dL){
+function drawPanel(G, n, tieSel, oL, dL){
   const P = document.getElementById('panel');
+  if(!n && tieSel){ drawTiePanel(G, tieSel, oL, dL); return; }
   if(!n){
     P.innerHTML = `<h2>Reading this network</h2>
       <div class="hint">
@@ -656,10 +693,12 @@ function drawPanel(G, n, oL, dL){
       shows the share of its own students continuing in the <i>same</i> department. Curved ties are
       cross-department corridors (${TRLBL[S.leg].toLowerCase()}), bowing to the right of their
       direction of travel.<br><br>
-      <b>Click a node</b> to isolate where its students go (orange = departures) and where its
-      arrivals come from (blue). Click a legend entry to light up that whole discipline
-      group's exchanges — orange ties leave the group, blue ties arrive into it; click it
-      again to release. Drag nodes; scroll to zoom.<br><br>
+      Each tie wears the color of the department it leaves; the arrowhead marks where it
+      lands. <b>Click a node</b> to isolate where its students go (orange = departures) and
+      where its arrivals come from (blue); <b>click a tie</b> to read that one corridor in
+      numbers and words, including the traffic running the other way. Click a legend entry to
+      light up a whole discipline group's exchanges; click again to release. Drag nodes;
+      scroll to zoom.<br><br>
       Every count is distinct students; corridor totals can overlap (a student can be on two
       corridors) — see “About these data.”</div>`;
     return;
@@ -743,8 +782,55 @@ function drawPanel(G, n, oL, dL){
   P.querySelectorAll('.fl').forEach(el=>{ el.onclick = ()=>{ S.focus=+el.dataset.id; update(); }; });
 }
 
+// ---------- the tie card: one corridor, in words and numbers ----------
+function drawTiePanel(G, tieSel, oL, dL){
+  const P = document.getElementById('panel');
+  const s = G.all.find(n=>n.i===tieSel[0]), d = G.all.find(n=>n.i===tieSel[1]);
+  if(!s || !d){ S.tieSel=null; return; }
+  const fwd = G.all && (G.links.find(l=>l.s===s&&l.t===d) || {c:0});
+  const rev = G.links.find(l=>l.s===d&&l.t===s) || {c:0};
+  const c = fwd.c||0, rc = rev.c||0;
+  const VERB = {l1:['intended','declared'], l2:['declared','finished with a degree in'],
+                l3:['intended','finished with a degree in']}[S.leg];
+  const sName = shortDept(s.id), dName = d.isSink ? 'no observed degree' : shortDept(d.id);
+  const sentence = d.isSink
+    ? `<b>${fmt(c)}</b> students ${VERB[0]} ${sName} and have no observed degree${S.leg!=='l1'?' yet':''}.`
+    : `<b>${fmt(c)}</b> students ${VERB[0]} ${sName} and ${VERB[1]} ${dName}.`;
+  const shares =
+    (s.origin? `<div class="stat"><span>share of ${sName}'s ${oL}-stage students</span><b>${pct(c/s.origin)}</b></div>`:'')+
+    (!d.isSink && d.dest? `<div class="stat"><span>share of ${dName}'s ${dL}-stage students</span><b>${pct(c/d.dest)}</b></div>`:'');
+  let symmetry = '';
+  if(!d.isSink){
+    if(c>0 && rc>0){
+      const ratio = Math.min(c,rc)/Math.max(c,rc);
+      symmetry = ratio>=0.6
+        ? `The reverse corridor (${dName} → ${sName}) carries <b>${fmt(rc)}</b> — roughly symmetric.
+           Two-way traffic of this size is usually <b>joint majors</b>, students holding both,
+           rather than students switching.`
+        : `The reverse corridor (${dName} → ${sName}) carries <b>${fmt(rc)}</b> — clearly
+           asymmetric: a genuine net movement from ${c>rc? sName : dName} toward ${c>rc? dName : sName}.`;
+    } else if(c>0){
+      symmetry = `Nothing measurable runs the other way — this is a <b>one-way corridor</b>.`;
+    }
+  }
+  P.innerHTML = `<h2>${sName} → ${d.isSink?'No degree':dName} <span class="x" title="close">✕</span></h2>
+    <div class="divname">${S.entry==='nf'?'new freshmen':'transfers'} ·
+      ${S.period.startsWith('era:')? D.frames[S.entry][+S.period.slice(4)].label : S.period.slice(4).replace(' Fall',' fall')}</div>
+    <p style="font-size:13px;line-height:1.55;margin:8px 0">${sentence}</p>
+    ${shares}
+    ${symmetry? `<p class="note" style="border-top:0;padding-top:4px">${symmetry}</p>`:''}
+    ${!d.isSink && rc>0? `<h3>Flip direction</h3>
+      <div class="fl" data-flip="1"><span class="nm">${dName} → ${sName}</span>
+        <span class="v">${fmt(rc)}</span></div>`:''}
+    <div class="note">Click either node for its full profile; click the background or press
+    Escape to release the selection.</div>`;
+  P.querySelector('.x').onclick = ()=>{ S.tieSel=null; update(); };
+  const flip = P.querySelector('[data-flip]');
+  if(flip) flip.onclick = ()=>{ S.tieSel=[tieSel[1],tieSel[0]]; update(); };
+}
+
 // ---------- boot ----------
-document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ S.focus=null; S.secSel=null; update(); } });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ S.focus=null; S.secSel=null; S.tieSel=null; update(); } });
 fillPeriod();
 if(!location.hash.includes('thr=')){ S.thr = adaptiveThr(); document.getElementById('thr').value = S.thr; }
 update();
